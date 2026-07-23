@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Claude Fleet Manager</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="inline-topbar" class="inline-topbar hidden">
+    <span id="inline-topbar-label"></span>
+    <button id="inline-close" class="secondary">Back to dashboard</button>
+  </div>
+
+  <div id="dashboard">
+    <header>
+      <div class="header-row">
+        <h1>Claude Fleet Manager</h1>
+        <div class="header-actions">
+          <div class="legend">
+            <span class="legend-item"><i class="dot free"></i>Free</span>
+            <span class="legend-item"><i class="dot in_use"></i>In use</span>
+            <span class="legend-item"><i class="dot near_limit"></i>Near limit</span>
+          </div>
+          <button id="reset-stats" class="secondary">Reset usage stats</button>
+          <button id="remove-all-sessions" class="danger">Remove all sessions</button>
+        </div>
+      </div>
+      <p class="subtitle">Shared Claude logins &mdash; add as many as your team needs, log in once each, come back to any of them any time.</p>
+    </header>
+
+    <div id="empty-state" class="empty-state hidden">
+      <p>No accounts yet.</p>
+      <button id="add-account-empty" class="primary">Add your first account</button>
+    </div>
+
+    <main id="grid"></main>
+
+    <button id="add-account-fab" class="add-fab hidden" title="Add account">+</button>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

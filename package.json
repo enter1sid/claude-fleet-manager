@@ -1,0 +1,13 @@
+{
+  "name": "claude-fleet-manager",
+  "version": "1.0.0",
+  "description": "Launcher/status board for a team sharing multiple Claude Desktop logins",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron . --no-sandbox"
+  },
+  "devDependencies": {
+    "electron": "^43.2.0"
+  }
+}
