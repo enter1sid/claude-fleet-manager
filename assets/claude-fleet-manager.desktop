@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Claude Fleet Manager
-Comment=Launcher/status board for a team sharing multiple Claude logins
-Exec=/home/siddhantkhanna/claude-fleet-manager/node_modules/.bin/electron /home/siddhantkhanna/claude-fleet-manager --no-sandbox
-Icon=/home/siddhantkhanna/claude-fleet-manager/assets/icon.png
-Terminal=false
-Categories=Utility;
-StartupWMClass=claude-fleet-manager

@@ -1,2 +1,18 @@
 node_modules/
 .serena/
+
+# Build output (installers are generated, never committed)
+dist/
+build/
+out/
+*.tgz
+
+# Exported account bundles contain live logins
+*.cfm.json
+
+# Local env, logs, OS junk
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db

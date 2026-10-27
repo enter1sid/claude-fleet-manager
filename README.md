@@ -1,95 +1,92 @@
 # Claude Fleet Manager
 
-A local launcher + status board for a team sharing 10 Claude Team-plan logins.
+A background tray app (macOS, Ubuntu, Windows) that manages shared Claude accounts for both
+**Claude Desktop** and the **Claude Code CLI**. It lives in the menu bar / system tray and switches
+which account each of them uses, manually or automatically based on usage. Built with Electron.
 
-## What this does
+> **Status:** core library, tray app and installers are written. Usage scanning, portable session
+> export/import and Windows/macOS verification are still open (see Limitations).
 
-- Lists 10 accounts (edit the label inline).
-- **Primary CTA is one consistent action, always the same underlying login:** "Log in with
-  Claude account" the first time, then "Open Claude" every time after — both open claude.ai
-  docked inside this app's own window (below a small top bar, no extra top-level window),
-  backed by an Electron session partition (`persist:account-N`) that Electron guarantees
-  persists across restarts. This is the account's real, reliable session — log in once here and
-  it stays logged in.
-- **A separate small link — "Also try the separate Claude Desktop app"** — spawns the real,
-  independently-installed Claude Desktop app pointed at an isolated profile directory
-  (`~/.claude-fleet-profiles/account-N`). This is a genuinely different, independently
-  authenticated session (see below on why) — it needs its own sign-in the first time, same as
-  logging into a second browser profile would, and is NOT a continuation of the primary button.
-  Earlier versions of this app made that same button evolve to "open Claude Desktop" once you'd
-  logged in via the embedded view, which made it look like one continuous session — it wasn't,
-  and that's what caused it to appear "not logged in." Keep the two mentally separate.
-- Each card shows a usage %/reset-time readout, auto-detected best-effort (see below), and a
-  green/grey dot for whether the account is currently open anywhere.
-- Header has two very different actions — don't confuse them:
-  - **"Reset usage stats"** — clears the tracked usage %/reset-time for all 10 accounts. Nobody
-    gets logged out.
-  - **"Remove all sessions"** — logs everyone OUT of everything: wipes every account's in-app
-    session partition and deletes every account's Claude Desktop profile directory. Destructive,
-    asks for confirmation, cannot be undone.
+## How it works
 
-## Why the in-app login and Claude Desktop need separate sign-ins
+- **Tray app, no main window.** The menu lists accounts; each has *Use in Desktop*, *Use in CLI*
+  and *Use in both*. On macOS it is menu-bar only. It starts at login.
+- **One active account per target.** Desktop and the CLI each have their own current account, and
+  any account can be used in either.
+- **Nothing is embedded.** Switching Desktop quits it, swaps the login inside Desktop's own profile
+  (claude.ai cookies and OAuth token caches), and relaunches it, so your normal main window comes
+  back on the other account. A backup of the previous login is kept in `<profile>/.cfm-login-backup`.
+  On Linux only Desktop's main process is asked to quit (signalling its GPU/zygote helpers too makes it
+  hang), with a force-kill after 15 s. A login is never saved into a different account's slot, and a
+  every switch (menu click or auto mode, which is on by default) hands the running session over: the old session is stopped, a handoff is built from its transcript, and the new account starts with it. Switching the CLI swaps the login in place (`~/.claude/.credentials.json` and `oauthAccount` in
+  `~/.claude.json`; the Keychain on macOS) with backup and rollback.
+- **Sessions:** CLI and Desktop Code conversations are transcripts in `~/.claude/projects/`; Desktop also keeps
+  per-account metadata in `<profile>/claude-code-sessions/<account>/<org>/`. Before each switch they are backed up
+  to `<app data>/session-backups/<time>` (last 10 kept), and a Desktop switch copies the old account's session
+  list into the new account so the same conversations open there.
+- **Adding accounts:** *Add account…* is one sign-in: Desktop signs in once (sign in to claude.ai in the browser as that
+  person first) and the CLI login is derived from Desktop's stored token, so the account works in both. Accounts that
+  only have a Desktop login get their CLI login automatically at start; a login already saved under another account
+  is refused. If Desktop's token cache has an unexpected layout, only its key names are reported.
+  Choosing *Use in Desktop* for an account that has no Desktop login starts that one sign-in on the spot. Auto mode
+  never prompts: it only switches to accounts already usable in that target. Saved tokens are refreshed every 5 minutes
+  from the live Desktop and CLI logins, and a Desktop switch that does not come up as the chosen account is reported.
 
-I checked whether Claude Desktop has any way to inherit a session you've already authenticated
-in a browser — it doesn't, for normal claude.ai accounts. Its bundle does reference a
-`device-code` flow, but that's for enterprise Entra ID / third-party model-provider SSO
-connections, unrelated to consumer claude.ai sign-in. There's no supported bridge, so this tool
-doesn't fake one — each of the two login methods above is genuinely independent, and each just
-persists reliably on its own once you've signed in through it the first time.
+## Auto mode
 
-## Why usage/reset-time is best-effort, not exact
+Each target is handled independently. When a target's current account passes **80%** of its
+5-hour session, that target switches to the **lowest-usage** other account. A reading counts as 0%
+after its reset time; signed-out and unread accounts are never picked; an account just switched
+away from is not picked again until it drops below the threshold; if no lower account exists you
+are notified. A forced switch stops the running session, builds a handoff from its transcript, and
+starts a fresh session on the new account with the handoff (CLI: new terminal window; Desktop: the
+handoff is put on the clipboard and pasted into the window if automation is available, otherwise
+you are told to paste it).
 
-Anthropic does not expose a public API for a Team-plan seat's live usage/reset-time. What this
-app does instead: while you're logged in via the in-app view, it passively scans the page text
-for phrases like "X% of your usage" or "resets at ...", and reports whatever it finds. claude.ai
-mostly only surfaces this information when you're actually close to or at the limit — so seeing
-"Not detected yet" most of the time is expected, not a bug. If your org later moves to
-Enterprise, the Admin API exposes real per-member spend caps and this could be wired in properly.
+## Install / uninstall
 
-## Setup
+`./build-installer.sh` (run on Ubuntu or macOS) regenerates both installers in `dist/`, each with
+its own Electron runtime so target machines need nothing pre-installed:
+
+| File | Platforms | Install | Uninstall |
+|---|---|---|---|
+| `dist/install.sh` | macOS, Ubuntu | `sh install.sh` | `sh install.sh -u` (add `--purge` to delete accounts) |
+| `dist/install.bat` | Windows | run it, press Enter (default is install) | run it, type `u` |
+
+Uninstall keeps your accounts unless you purge. Unsigned installers trigger a one-time Gatekeeper
+(macOS) or SmartScreen (Windows) warning. `CFM_PLATFORMS="linux-x64" ./build-installer.sh` builds
+a smaller single-platform installer for testing.
+
+## Development
 
 ```bash
-cd ~/workspace/claude-fleet-manager
 npm install
 npm start
+npm test
 ```
 
-If Claude Desktop is installed somewhere other than `/usr/bin/claude-desktop`, set:
+## Limitations
 
-```bash
-CLAUDE_DESKTOP_BIN=/path/to/claude-desktop npm start
-```
-
-### "SUID sandbox helper binary" error on Linux
-
-`npm start` runs with `--no-sandbox`, since this app only ever renders the local UI files in
-this repo (no remote/untrusted web content), which is the standard low-risk workaround for
-npm-installed Electron on Linux. If you'd rather keep Chromium's sandbox on, do the one-time
-fix instead and drop `--no-sandbox` from the `start` script in `package.json`:
-
-```bash
-sudo chown root:root node_modules/electron/dist/chrome-sandbox
-sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
-```
-
-## Current scope / limitations
-
-- **Single machine only.** Account data (labels, usage stats, session state flags) lives in a
-  local JSON file in Electron's userData dir. If your 10 people are on different machines, they
-  won't see each other's status updates unless this app runs on one shared machine everyone uses,
-  or you sync the file another way. Say the word if you want a shared backend instead.
-- **Window focus on Linux uses `wmctrl`.** When you launch or re-open an account's Claude Desktop
-  window, this app explicitly asks the window manager to raise and focus that specific window
-  (matched by process PID) via `wmctrl` — without this, a background-spawned window often doesn't
-  steal focus on its own, so you'd keep seeing whatever was already on screen (e.g. a different
-  account's already-open window). Needs `wmctrl` installed; works on X11, best-effort no-op on
-  most Wayland setups.
-- The usage/reset-time scanner only runs while the in-app (step 1) view is open for that
-  account — it doesn't watch Claude Desktop's own window.
-- **Claude Desktop always needs its own one-time sign-in per account, even after step 1.** I went
-  back and specifically checked Claude Desktop's `claude://` deep-link handling code (used for
-  things like opening a new chat) for any kind of auth-token handoff from a browser session —
-  there isn't one for normal accounts. So the first time you open an account in Claude Desktop,
-  it will show its own sign-in screen regardless of already being logged in via step 1; sign in
-  there once and — thanks to the `CLAUDE_USER_DATA_DIR` fix above — it'll be remembered for that
-  account from then on.
+- **Verified so far:** unit tests for the logic, and an install/uninstall run of `install.sh` on
+  Ubuntu. The tray UI, macOS and Windows paths, and the `.bat` have not been run.
+- **Usage** is read from each account's CLI login (endpoint unverified). Accounts with no usable CLI
+  login fall back to their Desktop profile's claude.ai session (`sessionKey` + `lastActiveOrg`
+  cookies, decrypted locally); that endpoint is also unverified.
+- **Session lifetime:** when you add an account you choose its lifetime in days (0 = never). When it
+  passes, the stored CLI login and Desktop profile are wiped, and if the account is active, the live
+  CLI login is removed and Desktop is quit. The row stays, marked expired. "Extend expiry" works only
+  while the account is still valid.
+- **Export / Import** (tray menu) produce an AES-256-GCM bundle with a passphrase. Each account keeps
+  its own expiry (the export dialog doesn't ask for one); an import keeps that date, skips expired
+  entries and never extends an existing account. Desktop cookies are exported decrypted (inside the
+  encrypted bundle) and re-encrypted with the importing machine's key. Linux is covered by tests;
+  the macOS (Keychain) and Windows (DPAPI) key handling is written but **unverified** on real machines.
+- A forced CLI switch stops only terminal sessions, never ones hosted by Claude Desktop, and the new
+  session starts with the previous `--model`. Effort is not carried over.
+- Windows process discovery finds `claude` sessions but not their folders, so it falls back to the
+  most recent session's folder.
+- Desktop model/effort can't be set automatically as far as known; the previous model is shown
+  in a notification instead.
+- On Ubuntu the tray icon needs AppIndicator support (on by default in Ubuntu's GNOME).
+- Stored CLI logins are plain JSON (mode 0600) in the app's data folder. Treat it like a password
+  file.
