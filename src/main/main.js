@@ -17,6 +17,7 @@ const { saveHandoff, buildDesktopUrl } = require('../lib/launch');
 const bundle = require('../lib/bundle');
 const sessions = require('../lib/sessions');
 const desktopToken = require('../lib/desktop-token');
+const detect = require('../lib/detect');
 const { askPassphrase, askExpiry, askText, askLoginMethod } = require('./prompt');
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -188,11 +189,10 @@ async function apply(targets, id, opts = {}) {
 // profile's claude.ai session. The active CLI account's stored login is re-captured first, because
 // the CLI itself refreshes that token.
 async function pollUsage() {
-  const adopted = store.load();
-  const fromCli = adoptLiveCli(adopted);
-  adoptLiveDesktop(adopted);
-  store.save(adopted);
-  offerDesktop(fromCli);
+  const live = store.load();
+  syncLiveCli(live);
+  adoptLiveDesktop(live, { create: false });
+  store.save(live);
   ensureCli();
   const state = store.load();
   syncTokens(state);
@@ -266,20 +266,8 @@ function autoTick() {
 }
 
 let signingIn = false;
-const cliUuid = (snap) => snap && snap.oauthAccount && snap.oauthAccount.accountUuid;
-
-// Gives `account` a CLI login derived from its saved Desktop login. Returns an error string or null.
-function deriveCli(state, account) {
-  if (account.cli) return null;
-  const { snapshot, email, error } = desktopToken.cliSnapshotFromDesktop(account.desktopProfile, desktop.loginId(account.desktopProfile));
-  if (error) return error;
-  const holder = state.accounts.find((a) => a.id !== account.id && cliUuid(a.cli) === cliUuid(snapshot));
-  if (holder) return `The CLI login would duplicate ${holder.label}.`;
-  account.cli = snapshot;
-  account.loggedIn = true;
-  store.adoptEmail(account, email);
-  return null;
-}
+const { cliUuid } = detect;
+const deriveCli = (state, account) => detect.deriveCli(state, account, store);
 
 // Fills in the CLI side of every account that has a Desktop login but no CLI login yet.
 function ensureCli() {
@@ -380,14 +368,15 @@ async function signInAccount() {
 
 // Whoever the main Desktop window is signed in as stays the active Desktop account. If that login
 // is not saved anywhere yet, it is saved into the account marked active for Desktop.
-// A login that is live in Desktop but saved nowhere becomes an account of its own (unless the user
-// removed it on purpose), and ensureCli then gives it its CLI login. Mutates `state`; returns whether
-// anything changed.
-function adoptLiveDesktop(state) {
+// With `create`, a login that is live in Desktop but saved nowhere becomes an account of its own (unless
+// the user removed it on purpose); the background poll passes false so it only tracks saved accounts.
+// Mutates `state`; returns whether anything changed.
+function adoptLiveDesktop(state, { create = true } = {}) {
   const live = desktop.loginId(desktop.defaultDir());
   if (!live) return false;
   const holder = state.accounts.find((a) => desktop.loginId(a.desktopProfile) === live);
   if (holder && holder.expired) return false;
+  if (!holder && !create) return false;
   const active = byId(state, state.active.desktop);
   let target = holder || (active && !active.expired && !desktop.hasLogin(active.desktopProfile) ? active : null);
   if (!holder && !target) {
@@ -401,34 +390,18 @@ function adoptLiveDesktop(state) {
   return true;
 }
 
-// The mirror of the above for the CLI: a login that is live in the CLI becomes (or refreshes) an
-// account. Returns the account when it was newly created, so Desktop can be offered for it.
-function adoptLiveCli(state) {
+// The CLI refreshes its own token, so the live login is written back into the saved account it
+// belongs to. Never creates an account: new ones come from the installer's detection or Add account.
+function syncLiveCli(state) {
   const live = captureCurrent(cliAdapter);
   const uuid = cliUuid(live);
-  if (!uuid) return null;
+  if (!uuid) return;
   const email = (live.oauthAccount.emailAddress || '').toLowerCase();
   const known = state.accounts.find((a) => (a.cli && cliUuid(a.cli) === uuid) || (email && String(a.label).toLowerCase() === email));
-  if (known) {
-    if (known.expired) return null;
-    if (!known.cli || cliUuid(known.cli) === uuid) known.cli = live;
-    known.loggedIn = true;
-    state.active.cli = known.id;
-    return null;
-  }
-  if ((state.ignored || []).includes(uuid)) return null;
-  const account = byId(state, store.addAccount(state, email || `Account ${state.accounts.length + 1}`));
-  account.cli = live;
-  account.loggedIn = true;
-  state.active.cli = account.id;
-  return account;
-}
-
-// A CLI-only account cannot get its Desktop login from the CLI token, so Desktop's own one-time
-// sign-in is offered right away; one click on the notification runs it.
-function offerDesktop(account) {
-  if (!account || !desktop.isInstalled() || desktop.hasLogin(account.desktopProfile)) return;
-  notify('Fleet Manager', `${account.label} was added from the CLI login. Click here to make it available in Claude Desktop too.`, () => apply(['desktop'], account.id, { force: true }));
+  if (!known || known.expired) return;
+  if (!known.cli || cliUuid(known.cli) === uuid) known.cli = live;
+  known.loggedIn = true;
+  state.active.cli = known.id;
 }
 
 // Remembers the logins of accounts being removed, so the still-live login is not added back.
@@ -575,13 +548,12 @@ function buildMenu() {
       ],
     },
     {
-      label: `Auto mode (switch above ${state.threshold}%)`,
-      type: 'checkbox',
-      checked: state.autoMode,
-      click: (item) => {
+      label: `${state.autoMode ? '☑' : '☐'}  Auto mode: ${state.autoMode ? 'ON' : 'OFF'} (switch above ${state.threshold}%)`,
+      click: () => {
         const s = store.load();
-        s.autoMode = item.checked;
+        s.autoMode = !s.autoMode;
         store.save(s);
+        refresh();
       },
     },
     { type: 'separator' },
@@ -601,7 +573,7 @@ function refresh() {
   const state = store.load();
   tray.setImage(trayIcon(state.accounts.some((a) => a.expired)));
   const names = ['desktop', 'cli'].map((t) => `${t}: ${(byId(state, state.active[t]) || {}).label || '—'}`);
-  tray.setToolTip(`Fleet Manager\n${names.join('\n')}`);
+  tray.setToolTip(`Fleet Manager\nauto mode: ${state.autoMode ? 'on' : 'off'}\n${names.join('\n')}`);
 }
 
 app.whenReady().then(() => {

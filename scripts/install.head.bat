@@ -23,6 +23,10 @@ tar -xzf "%TMPD%\payload.tgz" -C "%TMPD%" || goto fail
 if not exist "%TMPD%\runtimes\win32-x64.zip" (echo This installer has no Windows runtime. & goto fail)
 powershell -NoProfile -Command "Expand-Archive -Force '%TMPD%\runtimes\win32-x64.zip' '%APP_DIR%\electron'" || goto fail
 xcopy /e /i /q /y "%TMPD%\app" "%APP_DIR%\app" >nul || goto fail
+rem Save the Claude Desktop / CLI logins already on this machine as accounts (never fails the install).
+set "ELECTRON_RUN_AS_NODE=1"
+"%APP_DIR%\electron\electron.exe" "%APP_DIR%\app\src\main\detect-cli.js" 2>nul || echo Could not detect signed-in accounts. Use Add account from the tray menu.
+set "ELECTRON_RUN_AS_NODE="
 powershell -NoProfile -Command "$s=New-Object -ComObject WScript.Shell; foreach($p in '%STARTUP%','%MENU%'){ $l=$s.CreateShortcut($p); $l.TargetPath='%APP_DIR%\electron\electron.exe'; $l.Arguments='\"%APP_DIR%\app\"'; $l.WorkingDirectory='%APP_DIR%'; $l.Save() }"
 rmdir /s /q "%TMPD%"
 start "" "%APP_DIR%\electron\electron.exe" "%APP_DIR%\app"

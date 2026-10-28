@@ -41,6 +41,10 @@ else command -v unzip >/dev/null || { echo "Please install unzip (sudo apt insta
      unzip -q "$TMP/runtimes/$PLAT.zip" -d "$APP_DIR/electron"; fi
 cp -R "$TMP/app" "$APP_DIR/app"
 
+# Save the Claude Desktop / CLI logins already on this machine as accounts (never fails the install).
+if [ "$OS" = Darwin ]; then NODE_BIN="$APP_DIR/electron/Electron.app/Contents/MacOS/Electron"; else NODE_BIN="$APP_DIR/electron/electron"; chmod +x "$NODE_BIN"; fi
+ELECTRON_RUN_AS_NODE=1 "$NODE_BIN" "$APP_DIR/app/src/main/detect-cli.js" 2>/dev/null || echo "Could not detect signed-in accounts. Use Add account from the tray menu."
+
 if [ "$OS" = Darwin ]; then
   BIN="$APP_DIR/electron/Electron.app/Contents/MacOS/Electron"
   mkdir -p "$(dirname "$PLIST")"

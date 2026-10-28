@@ -53,6 +53,10 @@ its own Electron runtime so target machines need nothing pre-installed:
 | `dist/install.sh` | macOS, Ubuntu | `sh install.sh` | `sh install.sh -u` (add `--purge` to delete accounts) |
 | `dist/install.bat` | Windows | run it, press Enter (default is install) | run it, type `u` |
 
+Each install also saves the Claude Desktop and CLI logins already signed in on that machine as accounts
+(one account when both are the same person; saved accounts are kept and never duplicated). The app itself does not
+create accounts from live logins afterwards: use *Add account…* for new ones.
+
 Uninstall keeps your accounts unless you purge. Unsigned installers trigger a one-time Gatekeeper
 (macOS) or SmartScreen (Windows) warning. `CFM_PLATFORMS="linux-x64" ./build-installer.sh` builds
 a smaller single-platform installer for testing.
