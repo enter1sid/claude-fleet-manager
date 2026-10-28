@@ -538,3 +538,16 @@ test('expiry options cover 1, 2, 5, 10 days and Never; Never clears an expiry', 
 test('store defaults the login method to ask', () => {
   assert.equal(createStore(tmp()).load().loginMethod, 'ask');
 });
+
+test('toggle bitmap: knob side and track colour follow the state', () => {
+  const { toggleBitmap } = require('../src/lib/toggle-image');
+  const px = (b, x, y) => { const o = (y * b.width + x) * 4; return [b.buffer[o + 2], b.buffer[o + 1], b.buffer[o], b.buffer[o + 3]]; };
+  const on = toggleBitmap(true);
+  const off = toggleBitmap(false);
+  assert.equal(on.width, 104);
+  assert.deepEqual(px(on, 20, 30), [0x00, 0xac, 0xcd, 255]);
+  assert.deepEqual(px(on, 84, 30), [255, 255, 255, 255]);
+  assert.deepEqual(px(off, 84, 30), [0x4a, 0x4a, 0x50, 255]);
+  assert.deepEqual(px(off, 20, 30), [255, 255, 255, 255]);
+  assert.equal(px(on, 0, 0)[3], 0);
+});

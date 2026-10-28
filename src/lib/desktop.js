@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const cookiesLib = require('./cookies');
+const { log } = require('./log');
 
 const COOKIE_FILES = [path.join('Network', 'Cookies'), 'Cookies'];
 const COOKIE_SUFFIXES = ['', '-journal', '-wal', '-shm'];
@@ -186,8 +187,16 @@ async function quitLinux({ sys = linuxSys, graceMs = 15000, pollMs = 200 } = {})
 // Quits Desktop and waits until it has exited, so it cannot rewrite the cookies we are about to swap.
 async function quit(platform = process.platform, opts = {}) {
   if (platform !== 'darwin' && platform !== 'win32') return quitLinux(opts);
-  if (platform === 'darwin') spawnSync('osascript', ['-e', 'quit app "Claude"']);
-  else spawnSync('taskkill', ['/f', '/im', 'claude.exe']);
+  if (platform === 'darwin') {
+    // The Apple Event can be denied (Automation) or hang on a prompt, so it is time-limited and SIGTERM backs it up.
+    const r = spawnSync('osascript', ['-e', 'quit app "Claude"'], { encoding: 'utf8', timeout: 10000 });
+    log('quit: osascript status', r.status, (r.stderr || '').trim());
+    for (let i = 0; i < 25 && running(platform); i++) await sleep(200);
+    if (running(platform)) {
+      log('quit: osascript did not stop Claude, sending SIGTERM');
+      spawnSync('pkill', ['-TERM', '-x', 'Claude']);
+    }
+  } else spawnSync('taskkill', ['/f', '/im', 'claude.exe']);
   for (let i = 0; i < 50 && running(platform); i++) await sleep(200);
   if (running(platform)) throw new Error('Claude Desktop did not quit');
 }
@@ -217,17 +226,27 @@ function switchBlock(toSlot, dir = defaultDir()) {
 // (only when Desktop is signed in as that account, so a manual sign-in as someone else is never
 // overwritten onto it). `url` (a claude:// link) is passed as a launch argument; macOS delivers URLs
 // through LaunchServices, so there it is opened a few seconds after launch.
+// Starts Desktop. macOS goes through LaunchServices (`open`) so it starts as a normal app session.
+function launchApp({ platform = process.platform, url } = {}) {
+  const { cmd, args } = launchCommand(platform);
+  const [bin, binArgs] = platform === 'darwin' ? ['open', ['-a', path.resolve(cmd, '..', '..', '..')]] : [cmd, url ? [...args, url] : args];
+  log('launch:', bin, binArgs);
+  const child = spawn(bin, binArgs, { detached: true, stdio: 'ignore', env: launchEnv() });
+  child.on('error', (e) => log('launch failed:', e));
+  child.unref();
+  if (url && platform === 'darwin') setTimeout(() => spawn('open', [url], { detached: true, stdio: 'ignore' }).unref(), 6000);
+}
+
 async function switchTo(toSlot, { fromSlot, otherSlots = [], url, beforeLaunch, platform = process.platform, dir = defaultDir(platform) } = {}) {
   if (!hasLogin(toSlot)) throw new Error('That account has no saved Desktop login yet. Sign in once, then capture it.');
+  log('switchTo: quitting Desktop');
   await quit(platform);
   backupLogin(dir);
   if (fromSlot && !captureBlock(loginId(dir), fromSlot, otherSlots)) captureLogin(fromSlot, dir);
   restoreLogin(toSlot, dir);
   if (beforeLaunch) beforeLaunch();
-  const { cmd, args } = launchCommand(platform);
-  const child = spawn(cmd, url && platform !== 'darwin' ? [...args, url] : args, { detached: true, stdio: 'ignore', env: launchEnv() });
-  child.unref();
-  if (url && platform === 'darwin') setTimeout(() => spawn('open', [url], { detached: true, stdio: 'ignore' }).unref(), 6000);
+  log('switchTo: login restored, launching');
+  launchApp({ platform, url });
 }
 
-module.exports = { defaultDir, loginId, hasLogin, captureLogin, refreshTokens, captureBlock, switchBlock, restoreLogin, clearLogin, backupLogin, launchCommand, isInstalled, launchEnv, mainPids, quit, switchTo };
+module.exports = { defaultDir, loginId, hasLogin, captureLogin, refreshTokens, captureBlock, switchBlock, restoreLogin, clearLogin, backupLogin, launchCommand, launchApp, isInstalled, launchEnv, mainPids, quit, switchTo };

@@ -1,4 +1,4 @@
-const { app, Tray, Menu, Notification, clipboard, nativeImage, dialog } = require('electron');
+const { app, Tray, Menu, Notification, clipboard, nativeImage, dialog, shell, systemPreferences } = require('electron');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
@@ -18,11 +18,15 @@ const bundle = require('../lib/bundle');
 const sessions = require('../lib/sessions');
 const desktopToken = require('../lib/desktop-token');
 const detect = require('../lib/detect');
+const permissions = require('../lib/permissions');
+// Linux/Windows tray menus send nothing for a 2x-only image, so only macOS gets the retina size.
+const logger = require('../lib/log');
 const { askPassphrase, askExpiry, askText, askLoginMethod } = require('./prompt');
 
 if (!app.requestSingleInstanceLock()) app.quit();
 if (process.platform === 'darwin' && app.dock) app.dock.hide();
 
+logger.init(app.getPath('logs'));
 const store = createStore(app.getPath('userData'));
 const cliAdapter = createCliAdapter();
 const switchedFrom = { desktop: new Set(), cli: new Set() };
@@ -72,12 +76,31 @@ async function switchCli(state, account, { force = false } = {}) {
   }
 }
 
+// macOS only. Shows what is missing and where to grant it; true when everything is in place.
+async function ensurePermissions({ intro = false } = {}) {
+  if (process.platform !== 'darwin') return true;
+  if (intro) {
+    await dialog.showMessageBox({ type: 'info', message: 'Claude Fleet Manager needs a few permissions', detail: 'macOS will now ask for Keychain access (Desktop\'s sign-in key), Accessibility (to paste a handoff) and permission to control Claude. Please choose Allow / Always Allow.', buttons: ['Continue'] });
+    systemPreferences.isTrustedAccessibilityClient(true);
+  }
+  const missing = permissions.probe();
+  logger.log('permissions missing:', missing);
+  for (const m of missing) {
+    const p = permissions.PANES[m];
+    const { response } = await dialog.showMessageBox({ type: 'warning', message: `Permission needed: ${p.label}`, detail: 'Grant it, then try again.', buttons: [p.url ? 'Open System Settings' : `Open ${p.app}`, 'Cancel'] });
+    if (response === 0) { if (p.url) shell.openExternal(p.url); else spawn('open', ['-a', p.app], { detached: true, stdio: 'ignore' }).unref(); }
+  }
+  return missing.length === 0;
+}
+
 async function switchDesktop(state, account, { force = false } = {}) {
   // The folder in use: a running claude session's folder, else the most recent session's.
   const folder = (procs.findClaudeCli().find((p) => p.cwd) || {}).cwd || latestSessionCwd();
   const handoff = force && folder ? buildHandoff({ cwd: folder }) : null;
   if (force && !handoff) notify('Fleet Manager', 'No recent session found to hand off, so Desktop was just switched.');
   const model = handoff && handoff.model ? ` Previous model: ${handoff.model}; set it manually if it differs.` : '';
+  if (!(await ensurePermissions())) throw new Error('a macOS permission is missing');
+  logger.log('switchDesktop ->', account.label);
   const from = byId(state, state.active.desktop);
   const fromSlot = from && from.id !== account.id ? from.desktopProfile : null;
   const otherSlots = state.accounts.filter((a) => !from || a.id !== from.id).map((a) => a.desktopProfile);
@@ -179,6 +202,7 @@ async function apply(targets, id, opts = {}) {
     if (targets.includes('desktop')) await switchDesktop(state, account, opts);
     if (targets.includes('cli')) await switchCli(state, account, opts);
   } catch (err) {
+    logger.log('switch failed:', err);
     notify('Fleet Manager', `Switch failed: ${err.message}`);
   }
   store.save(state);
@@ -296,8 +320,7 @@ async function signInDesktop(state, account) {
   if (holder) desktop.captureLogin(holder.desktopProfile, dir);
   desktop.backupLogin(dir);
   desktop.clearLogin(dir);
-  const { cmd, args } = desktop.launchCommand();
-  spawn(cmd, args, { detached: true, stdio: 'ignore', env: desktop.launchEnv() }).unref();
+  desktop.launchApp();
   notify('Fleet Manager', 'Sign in to Claude Desktop now. Waiting up to 5 minutes.');
   let live = null;
   for (let i = 0; i < 150 && !live; i++) {
@@ -504,6 +527,13 @@ async function extendAccount(id) {
   refresh();
 }
 
+function toggleAutoMode() {
+  const s = store.load();
+  s.autoMode = !s.autoMode;
+  store.save(s);
+  refresh();
+}
+
 function buildMenu() {
   const state = store.load();
   const usage = (a) => (effectiveUsage(a) == null ? '' : ` — ${effectiveUsage(a)}%`);
@@ -547,16 +577,9 @@ function buildMenu() {
         { label: 'Claude Code CLI', type: 'radio', checked: method === 'cli', click: setMethod('cli') },
       ],
     },
-    {
-      label: `${state.autoMode ? '☑' : '☐'}  Auto mode: ${state.autoMode ? 'ON' : 'OFF'} (switch above ${state.threshold}%)`,
-      click: () => {
-        const s = store.load();
-        s.autoMode = !s.autoMode;
-        store.save(s);
-        refresh();
-      },
-    },
+    { label: 'Auto Mode', type: 'checkbox', checked: state.autoMode, click: toggleAutoMode },
     { type: 'separator' },
+    { label: 'Open log folder', click: () => shell.openPath(app.getPath('logs')) },
     { label: 'Export accounts…', click: exportAccounts },
     { label: 'Import accounts…', click: importAccounts },
     { label: 'Remove all accounts…', enabled: state.accounts.length > 0, click: removeAllAccounts },
@@ -577,7 +600,14 @@ function refresh() {
 }
 
 app.whenReady().then(() => {
+  logger.log('started', app.getVersion(), process.platform, process.arch);
   tray = new Tray(trayIcon(false));
+  const first = store.load();
+  if (process.platform === 'darwin' && !first.permissionsAsked) {
+    first.permissionsAsked = true;
+    store.save(first);
+    ensurePermissions({ intro: true }).catch((e) => logger.log('permissions:', e));
+  }
   sweep();
   refresh();
   pollUsage();

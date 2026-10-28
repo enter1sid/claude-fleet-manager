@@ -39,7 +39,7 @@ const LIBSECRET_LOOKUP = [
 
 function run(cmd, args) {
   try {
-    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 120000 }).trim();
   } catch {
     return null;
   }
