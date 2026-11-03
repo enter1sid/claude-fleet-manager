@@ -5,6 +5,7 @@
 # Limit the build with CFM_PLATFORMS, e.g. CFM_PLATFORMS=linux-x64 ./build-installer.sh
 set -euo pipefail
 cd "$(dirname "$0")"
+chmod +x "$0" scripts/*.sh
 
 PLATFORMS="${CFM_PLATFORMS:-linux-x64 darwin-x64 darwin-arm64 win32-x64}"
 [ -d node_modules/electron ] || npm install --no-audit --no-fund --silent

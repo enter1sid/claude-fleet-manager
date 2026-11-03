@@ -84,6 +84,7 @@ async function ensurePermissions({ intro = false } = {}) {
     systemPreferences.isTrustedAccessibilityClient(true);
   }
   const missing = permissions.probe();
+  if (!systemPreferences.isTrustedAccessibilityClient(false)) missing.push('accessibility');
   logger.log('permissions missing:', missing);
   for (const m of missing) {
     const p = permissions.PANES[m];
@@ -128,6 +129,7 @@ async function switchDesktop(state, account, { force = false } = {}) {
 
 // Whether a missing login is created through Desktop (true) or the CLI sign-in (false), per the saved setting.
 const viaDesktopFor = (method) => (method === 'cli' ? false : desktop.isInstalled());
+const METHODS = ['isolated', 'desktop', 'cli'];
 
 // A slot saved from cookies alone (e.g. an imported bundle) has no OAuth token cache, so no CLI login can be
 // derived from it. Opening Desktop once on that account makes it write the cache, which is then saved back.
@@ -309,8 +311,52 @@ function ensureCli() {
   notify('Fleet Manager', `CLI login set up from the Desktop login for: ${done.join(', ')}.`);
 }
 
-// Signs Desktop out, relaunches it, waits for the sign-in, and saves it into `account`.
-async function signInDesktop(state, account) {
+// Saves the login live in profile `dir` into `account`'s slot. Desktop must have quit first: it only flushes
+// its cookies to disk while running down, and a slot captured earlier restores signed out.
+function saveDesktopLogin(state, account, live, dir) {
+  const others = state.accounts.filter((a) => a.id !== account.id && !a.expired).map((a) => a.desktopProfile);
+  const blocked = desktop.captureBlock(live, account.desktopProfile, others, { replace: true });
+  if (blocked) return `Desktop login not saved: ${blocked} Sign out of claude.ai in the browser and try again.`;
+  desktop.captureLogin(account.desktopProfile, dir);
+  const names = desktop.cookieNames(account.desktopProfile);
+  logger.log('saveDesktopLogin: saved cookies', names);
+  if (process.platform === 'darwin' && !(names || []).includes('sessionKey')) return 'The Desktop login was saved without a claude.ai session cookie, so it would open signed out. See the log folder for details.';
+  account.loggedIn = true;
+  return null;
+}
+
+const waitForLogin = async (dir, { alive } = {}) => {
+  let live = null;
+  const started = Date.now();
+  for (let i = 0; i < 150 && !live; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    live = desktop.loginId(dir);
+    if (!live && alive && Date.now() - started > 30000 && !alive()) break;
+  }
+  return live;
+};
+
+// Signs in to Desktop in a throwaway second instance. The main Desktop profile is never touched, so
+// whoever is signed in there stays signed in.
+async function signInIsolated(state, account) {
+  const dir = fs.mkdtempSync(path.join(app.getPath('userData'), 'signin-'));
+  try {
+    desktop.launchIsolated(dir);
+    notify('Fleet Manager', 'Sign in in the new Claude Desktop window. Your main Desktop stays signed in. Waiting up to 5 minutes.');
+    const sys = desktop.isolatedSys(dir);
+    const live = await waitForLogin(dir, { alive: () => sys.list().length > 0 });
+    if (!live) return 'The separate sign-in window did not complete a sign-in.';
+    await desktop.quitIsolated(dir);
+    return saveDesktopLogin(state, account, live, dir);
+  } finally {
+    await desktop.quitIsolated(dir).catch(() => {});
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// The original method: signs the main Desktop out, relaunches it, waits for the sign-in, saves it into
+// `account` and brings Desktop back up as that account.
+async function signInDirect(state, account) {
   const dir = desktop.defaultDir();
   adoptLiveDesktop(state);
   await desktop.quit();
@@ -322,19 +368,28 @@ async function signInDesktop(state, account) {
   desktop.clearLogin(dir);
   desktop.launchApp();
   notify('Fleet Manager', 'Sign in to Claude Desktop now. Waiting up to 5 minutes.');
-  let live = null;
-  for (let i = 0; i < 150 && !live; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    live = desktop.loginId(dir);
-  }
+  const live = await waitForLogin(dir);
   if (!live) return 'Desktop sign-in did not finish.';
-  const others = state.accounts.filter((a) => a.id !== account.id && !a.expired).map((a) => a.desktopProfile);
-  const blocked = desktop.captureBlock(live, account.desktopProfile, others, { replace: true });
-  if (blocked) return `Desktop login not saved: ${blocked} Sign out of claude.ai in the browser and try again.`;
-  desktop.captureLogin(account.desktopProfile, dir);
-  account.loggedIn = true;
-  state.active.desktop = account.id;
-  return null;
+  try {
+    await desktop.quit();
+    const err = saveDesktopLogin(state, account, live, dir);
+    if (!err) state.active.desktop = account.id;
+    return err;
+  } finally {
+    desktop.launchApp();
+  }
+}
+
+// 'isolated' (default) tries the separate window first and falls back to the original method when it does
+// not work; 'desktop' goes straight to the original method.
+async function signInDesktop(state, account, method = state.loginMethod) {
+  if (method !== 'desktop') {
+    const err = await signInIsolated(state, account);
+    if (!err) return null;
+    logger.log('signInIsolated failed:', err);
+    notify('Fleet Manager', `${err} Falling back to signing in through your main Desktop.`);
+  }
+  return signInDirect(state, account);
 }
 
 // Without Desktop: signs in through `claude auth login` and saves the new CLI login into `account`.
@@ -369,14 +424,14 @@ async function signInAccount() {
     const state = store.load();
     const installed = desktop.isInstalled();
     let method = state.loginMethod;
-    if (method === 'desktop' && !installed) return notify('Fleet Manager', 'Claude Desktop is not installed. Pick another login method from the menu.');
-    if (method !== 'desktop' && method !== 'cli') method = await askLoginMethod('Add account', { desktopAvailable: installed });
+    if (method !== 'cli' && METHODS.includes(method) && !installed) return notify('Fleet Manager', 'Claude Desktop is not installed. Pick another login method from the menu.');
+    if (!METHODS.includes(method)) method = await askLoginMethod('Add account', { desktopAvailable: installed });
     if (!method) return;
     const days = await askExpiry('Session lifetime for this account');
     if (days == null) return;
     const account = byId(state, store.addAccount(state, `Account ${state.accounts.length + 1}`, { expiresAt: expiry.expiryFromDays(days) }));
-    const viaDesktop = method === 'desktop';
-    const err = viaDesktop ? (await signInDesktop(state, account)) || deriveCli(state, account) : await signInCli(state, account);
+    const viaDesktop = method !== 'cli';
+    const err = viaDesktop ? (await signInDesktop(state, account, method)) || deriveCli(state, account) : await signInCli(state, account);
     // A sign-in that failed leaves no empty account behind.
     if (err && !account.cli && !desktop.hasLogin(account.desktopProfile)) expiry.removeAccounts(state, [account.id], path.join(app.getPath('userData'), 'profiles'));
     store.save(state);
@@ -562,7 +617,8 @@ function buildMenu() {
     store.save(s);
     refresh();
   };
-  const method = ['ask', 'desktop', 'cli'].includes(state.loginMethod) ? state.loginMethod : 'ask';
+  const method = [...METHODS, 'ask'].includes(state.loginMethod) ? state.loginMethod : 'isolated';
+  const radio = (label, m) => ({ label, type: 'radio', checked: method === m, click: setMethod(m) });
   return Menu.buildFromTemplate([
     { label: 'Fleet Manager', enabled: false },
     { type: 'separator' },
@@ -572,9 +628,11 @@ function buildMenu() {
     {
       label: 'Login method',
       submenu: [
-        { label: 'Ask each time', type: 'radio', checked: method === 'ask', click: setMethod('ask') },
-        { label: 'Claude Desktop', type: 'radio', checked: method === 'desktop', click: setMethod('desktop') },
-        { label: 'Claude Code CLI', type: 'radio', checked: method === 'cli', click: setMethod('cli') },
+        radio('Separate window (keeps main Desktop signed in)', 'isolated'),
+        radio('Claude Desktop (signs out the main Desktop)', 'desktop'),
+        radio('Claude Code CLI', 'cli'),
+        { type: 'separator' },
+        radio('Ask each time', 'ask'),
       ],
     },
     { label: 'Auto Mode', type: 'checkbox', checked: state.autoMode, click: toggleAutoMode },

@@ -2,11 +2,13 @@
 // once at first start and again before a Desktop switch, to catch anything denied or revoked since.
 //   keychain    reading "Claude Safe Storage" (Desktop's cookie/token key)
 //   automation  telling Claude to quit (only checkable while Claude is running)
+//   accessibility  pasting a handoff into Desktop (checked by the caller: it needs Electron's API)
 const { spawnSync } = require('child_process');
 
 const PANES = {
   keychain: { label: 'Keychain access to "Claude Safe Storage" (choose Always Allow)', app: 'Keychain Access' },
   automation: { label: 'Automation permission to control Claude', url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Automation' },
+  accessibility: { label: 'Accessibility permission to paste a handoff', url: 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility' },
 };
 
 const sh = (cmd, args, timeout) => {

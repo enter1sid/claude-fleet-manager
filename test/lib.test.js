@@ -175,6 +175,28 @@ test('quit escalates to SIGKILL on every process when main ignores SIGTERM', asy
   assert.deepEqual(orphans.calls, [['SIGKILL', [9]]]);
 });
 
+test('quitting a sign-in instance only touches processes on its own profile', async () => {
+  const { spawn } = require('child_process');
+  const [mine, other] = [tmp(), tmp()];
+  const run = (dir) => spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)', '--', `--user-data-dir=${dir}`], { stdio: 'ignore' });
+  const a = run(mine);
+  const b = run(other);
+  await new Promise((r) => setTimeout(r, 300));
+  try {
+    assert.deepEqual(desktop.isolatedSys(mine, 'linux').list().map((e) => e.pid), [a.pid]);
+    await desktop.quitIsolated(mine, { graceMs: 3000, pollMs: 20 });
+    assert.deepEqual(desktop.isolatedSys(mine, 'linux').list(), []);
+    assert.equal(desktop.isolatedSys(other, 'linux').list().length, 1);
+  } finally {
+    a.kill('SIGKILL');
+    b.kill('SIGKILL');
+  }
+});
+
+test('cookie names of a profile are listed without values, null when unreadable', () => {
+  assert.deepEqual(desktop.cookieNames(tmp()), []);
+});
+
 test('launch environment drops the tray app\'s Electron variables', () => {
   const env = desktop.launchEnv({ PATH: '/bin', ELECTRON_RUN_AS_NODE: '1', ELECTRON_PA_APP_NAME: 'Claude', CHROME_DESKTOP: 'x.desktop', HOME: '/h' });
   assert.deepEqual(env, { PATH: '/bin', HOME: '/h' });
@@ -535,8 +557,8 @@ test('expiry options cover 1, 2, 5, 10 days and Never; Never clears an expiry', 
   assert.equal(expiry.expiryFromDays(0), null);
 });
 
-test('store defaults the login method to ask', () => {
-  assert.equal(createStore(tmp()).load().loginMethod, 'ask');
+test('store defaults the login method to the separate sign-in window', () => {
+  assert.equal(createStore(tmp()).load().loginMethod, 'isolated');
 });
 
 test('toggle bitmap: knob side and track colour follow the state', () => {

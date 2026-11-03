@@ -6,7 +6,7 @@ const crypto = require('crypto');
 // the path of its own Claude Desktop profile.
 function createStore(dir) {
   const file = path.join(dir, 'accounts.json');
-  const empty = () => ({ accounts: [], autoMode: true, loginMethod: 'ask', threshold: 80, active: { desktop: null, cli: null }, ignored: [] });
+  const empty = () => ({ accounts: [], autoMode: true, loginMethod: 'isolated', threshold: 80, active: { desktop: null, cli: null }, ignored: [] });
 
   function load() {
     try {

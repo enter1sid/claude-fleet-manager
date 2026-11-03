@@ -24,7 +24,8 @@ which account each of them uses, manually or automatically based on usage. Built
   per-account metadata in `<profile>/claude-code-sessions/<account>/<org>/`. Before each switch they are backed up
   to `<app data>/session-backups/<time>` (last 10 kept), and a Desktop switch copies the old account's session
   list into the new account so the same conversations open there.
-- **Adding accounts:** *Add account…* is one sign-in: Desktop signs in once (sign in to claude.ai in the browser as that
+- **Adding accounts:** *Add account…* is one sign-in: a second, throwaway Desktop window opens on its own temporary profile
+  (your main Desktop stays signed in) and signs in once (sign in to claude.ai in the browser as that
   person first) and the CLI login is derived from Desktop's stored token, so the account works in both. Accounts that
   only have a Desktop login get their CLI login automatically at start; a login already saved under another account
   is refused. If Desktop's token cache has an unexpected layout, only its key names are reported.
@@ -71,6 +72,13 @@ npm test
 
 ## Limitations
 
+- **Login methods** (tray menu, *Login method*): *Separate window* (default) signs in in a second Desktop window on a
+  throwaway profile and falls back to *Claude Desktop* (signs the main Desktop out, then back in as the new account) if
+  that window cannot complete a sign-in; *Claude Code CLI* runs `claude auth login`; *Ask each time* shows the choice.
+- **macOS permissions:** the installer clears the "asked" flag, so the first start after every install asks for Keychain
+  (Desktop's sign-in key), Accessibility (handoff paste) and Automation (quit/restart Claude). Re-signing the app on each
+  install makes macOS forget earlier grants, which is why they are asked again.
+- **macOS sign-in (unverified):** a login is saved only after the sign-in window quits, so its cookies are flushed to disk; on macOS it is refused unless a `sessionKey` cookie was saved. The sign-in window relies on the browser callback reaching that window rather than the main Desktop; if it does not, the sign-in times out and the CLI login method can be used.
 - **Verified so far:** unit tests for the logic, and an install/uninstall run of `install.sh` on
   Ubuntu. The tray UI, macOS and Windows paths, and the `.bat` have not been run.
 - **Usage** is read from each account's CLI login (endpoint unverified). Accounts with no usable CLI

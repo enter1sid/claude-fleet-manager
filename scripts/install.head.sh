@@ -76,6 +76,9 @@ if [ "$OS" = Darwin ]; then DETECT="$BUNDLE/Contents/Resources/app/src/main/dete
 ELECTRON_RUN_AS_NODE=1 "$NODE_BIN" "$DETECT" 2>/dev/null || echo "Could not detect signed-in accounts. Use Add account from the tray menu."
 
 if [ "$OS" = Darwin ]; then
+  # Re-signing gives the app a new identity, so macOS forgets any permission granted to the previous install.
+  # Clearing this flag makes the app show its permission prompts (Keychain, Accessibility, Automation) on this start.
+  ELECTRON_RUN_AS_NODE=1 "$NODE_BIN" -e 'const fs=require("fs"),f=process.argv[1];try{const s=JSON.parse(fs.readFileSync(f,"utf8"));delete s.permissionsAsked;fs.writeFileSync(f,JSON.stringify(s,null,2),{mode:0o600})}catch{}' "$DATA_DIR/accounts.json" 2>/dev/null || true
   mkdir -p "$(dirname "$PLIST")"
   cat > "$PLIST" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
@@ -103,5 +106,6 @@ Categories=Utility;"
   command -v update-desktop-database >/dev/null && update-desktop-database "$(dirname "$DESKTOP")" 2>/dev/null || true
   nohup "$BIN" --no-sandbox "$APP_DIR/app" >/dev/null 2>&1 &
 fi
+[ "$OS" = Darwin ] && echo "macOS will now ask for Keychain, Accessibility and Automation access. Please choose Allow / Always Allow."
 echo "Installed. The Claude Fleet Manager icon is in your menu bar / system tray."
 exit 0

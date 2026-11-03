@@ -168,6 +168,46 @@ const linuxSys = {
   },
 };
 
+// A second Desktop instance on its own throwaway profile, used for sign-ins so the main profile is never
+// signed out. Only --user-data-dir is used: packaged Desktop discards CLAUDE_USER_DATA_DIR.
+function launchIsolated(dir, { platform = process.platform } = {}) {
+  const { cmd, args } = launchCommand(platform);
+  const flag = `--user-data-dir=${dir}`;
+  const [bin, binArgs] = platform === 'darwin' ? ['open', ['-n', '-a', path.resolve(cmd, '..', '..', '..'), '--args', flag]] : [cmd, [...args, flag]];
+  log('launchIsolated:', bin, binArgs);
+  const child = spawn(bin, binArgs, { detached: true, stdio: 'ignore', env: launchEnv() });
+  child.on('error', (e) => log('launchIsolated failed:', e));
+  child.unref();
+}
+
+// Processes belonging to the instance on profile `dir` (the flag is inherited by Chromium's helpers).
+function isolatedSys(dir, platform = process.platform) {
+  const flag = `--user-data-dir=${dir}`;
+  return {
+    list() {
+      const out = platform === 'win32'
+        ? spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process -Filter "Name='claude.exe'" | ForEach-Object { "$($_.ProcessId)\`t$($_.CommandLine)" }`], { encoding: 'utf8' }).stdout
+        : spawnSync('ps', ['-axo', 'pid=,args='], { encoding: 'utf8' }).stdout;
+      return (out || '').split('\n')
+        .map((l) => l.trim().match(/^(\d+)\s+(.*)$/))
+        .filter((m) => m && m[2].includes(flag) && Number(m[1]) !== process.pid)
+        .map((m) => ({ pid: Number(m[1]), args: m[2] }));
+    },
+    signal: linuxSys.signal,
+  };
+}
+
+const quitIsolated = (dir, opts = {}) => quitLinux({ sys: isolatedSys(dir), ...opts });
+
+// Names of the cookies saved in a profile or slot (never values), for diagnosing logins that restore signed out.
+function cookieNames(dir) {
+  try {
+    return [...new Set(cookiesLib.readCookies(dir).map((c) => c.name))];
+  } catch {
+    return null;
+  }
+}
+
 async function quitLinux({ sys = linuxSys, graceMs = 15000, pollMs = 200 } = {}) {
   const first = sys.list();
   if (!first.length) return;
@@ -240,6 +280,7 @@ function launchApp({ platform = process.platform, url } = {}) {
 async function switchTo(toSlot, { fromSlot, otherSlots = [], url, beforeLaunch, platform = process.platform, dir = defaultDir(platform) } = {}) {
   if (!hasLogin(toSlot)) throw new Error('That account has no saved Desktop login yet. Sign in once, then capture it.');
   log('switchTo: quitting Desktop');
+  if (platform === 'darwin') log('switchTo: slot cookies', cookieNames(toSlot));
   await quit(platform);
   backupLogin(dir);
   if (fromSlot && !captureBlock(loginId(dir), fromSlot, otherSlots)) captureLogin(fromSlot, dir);
@@ -249,4 +290,4 @@ async function switchTo(toSlot, { fromSlot, otherSlots = [], url, beforeLaunch, 
   launchApp({ platform, url });
 }
 
-module.exports = { defaultDir, loginId, hasLogin, captureLogin, refreshTokens, captureBlock, switchBlock, restoreLogin, clearLogin, backupLogin, launchCommand, launchApp, isInstalled, launchEnv, mainPids, quit, switchTo };
+module.exports = { defaultDir, loginId, hasLogin, captureLogin, refreshTokens, captureBlock, switchBlock, restoreLogin, clearLogin, backupLogin, launchCommand, launchApp, isInstalled, launchEnv, mainPids, quit, switchTo, launchIsolated, isolatedSys, quitIsolated, cookieNames };

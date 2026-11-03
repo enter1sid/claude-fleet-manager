@@ -88,15 +88,17 @@ function askText(title, { value = '', placeholder = '', hint = '' } = {}) {
   });
 }
 
-// Resolves to 'desktop', 'cli' or null if cancelled.
+// Resolves to 'isolated', 'desktop', 'cli' or null if cancelled.
 function askLoginMethod(title, { desktopAvailable = true } = {}) {
+  const choice = (id, ico, name, text) => `<button class=choice onclick="submit('${id}')"><span class=ico>${ico}</span><div><b>${name}</b><span>${text}</span></div></button>`;
   return openPrompt({
     title,
-    height: desktopAvailable ? 300 : 250,
+    height: desktopAvailable ? 400 : 250,
     body: `<h1>${esc(title)}</h1><p class=sub>How should this account sign in?</p>
       <div class=stack>
-        ${desktopAvailable ? `<button class=choice onclick="submit('desktop')"><span class=ico>🖥️</span><div><b>Claude Desktop</b><span>Sign in once; the CLI login is derived from it.</span></div></button>` : ''}
-        <button class=choice onclick="submit('cli')"><span class=ico>⌨️</span><div><b>Claude Code CLI</b><span>Runs <code>claude auth login</code> in a terminal.</span></div></button>
+        ${desktopAvailable ? choice('isolated', '🪟', 'Separate window (recommended)', 'Signs in in a new Desktop window. Your main Desktop stays signed in.') : ''}
+        ${desktopAvailable ? choice('desktop', '🖥️', 'Claude Desktop', 'Signs out your main Desktop and signs in there.') : ''}
+        ${choice('cli', '⌨️', 'Claude Code CLI', 'Runs <code>claude auth login</code> in a terminal.')}
       </div><div class=row><button onclick="submit(null)">Cancel</button></div>`,
   });
 }
